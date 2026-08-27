@@ -11,7 +11,7 @@ const CATEGORIES = [
   "חגים",
   "מלוחים",
   "שונות",
-   "יערה"
+   "מתן השמן"
 ];
 
 const RECIPES = [
