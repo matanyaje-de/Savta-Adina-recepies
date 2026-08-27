@@ -254,15 +254,10 @@
       "</div>" +
       commentsMarkup(recipe) +
       "</div></article>" +
-      '<button type="button" class="floating-back-btn" id="floating-back-btn" aria-label="חזרה לספר המתכונים">' +
-      ICONS.arrowRight +
-      '<span>חזרה לספר</span>' +
-      "</button>" +
       "</div>";
 
     attachImageFallback(recipeView);
-    document.getElementById("back-btn").addEventListener("click", closeRecipe);
-    document.getElementById("floating-back-btn").addEventListener("click", closeRecipe);
+    document.getElementById("back-btn").addEventListener("click", showBook);
     bindCommentForm(recipe);
   }
 
@@ -358,35 +353,13 @@
     window.scrollTo(0, gridScrollY);
   }
 
-  function showRecipe(recipe, addHistoryEntry) {
+  function showRecipe(recipe) {
     gridScrollY = window.scrollY;
     selectedRecipe = recipe;
     bookView.hidden = true;
     recipeView.hidden = false;
     renderRecipe(recipe);
     window.scrollTo(0, 0);
-
-    if (addHistoryEntry !== false) {
-      window.history.pushState(
-        { view: "recipe", recipeId: recipe.id },
-        "",
-        "#recipe-" + recipe.id
-      );
-    }
-  }
-
-  function closeRecipe() {
-    if (window.history.state && window.history.state.view === "recipe") {
-      window.history.back();
-      return;
-    }
-
-    showBook();
-    window.history.replaceState(
-      { view: "book" },
-      "",
-      window.location.pathname + window.location.search
-    );
   }
 
   /* ------------------------------------------------------------ אירועים */
@@ -415,28 +388,14 @@
       return String(item.id) === card.dataset.id;
     });
     if (recipe) {
-      showRecipe(recipe, true);
+      showRecipe(recipe);
     }
   });
 
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && selectedRecipe) {
-      closeRecipe();
+      showBook();
     }
-  });
-
-  window.addEventListener("popstate", function (event) {
-    var state = event.state || {};
-    if (state.view === "recipe") {
-      var recipe = RECIPES.find(function (item) {
-        return item.id === state.recipeId;
-      });
-      if (recipe) {
-        showRecipe(recipe, false);
-        return;
-      }
-    }
-    showBook();
   });
 
   /* דפדפנים משחזרים את תוכן תיבת החיפוש לאחר רענון — מסנכרנים את המצב אליו */
@@ -444,26 +403,4 @@
 
   renderCategories();
   renderGrid();
-
-  var recipeMatch = window.location.hash.match(/^#recipe-(\d+)$/);
-  var initialRecipe = recipeMatch
-    ? RECIPES.find(function (item) {
-        return item.id === Number(recipeMatch[1]);
-      })
-    : null;
-
-  if (initialRecipe) {
-    window.history.replaceState(
-      { view: "recipe", recipeId: initialRecipe.id },
-      "",
-      window.location.href
-    );
-    showRecipe(initialRecipe, false);
-  } else {
-    window.history.replaceState(
-      { view: "book" },
-      "",
-      window.location.pathname + window.location.search
-    );
-  }
 })();
