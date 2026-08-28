@@ -1,6 +1,7 @@
 /* ספר המתכונים של סבתא — לוגיקת האפליקציה.
-   אתר סטטי לגמרי: אין שרת, אין ספריות חיצוניות, אין קריאות רשת.
-   כל הנתונים נטענים מ-data.js וכל התמונות מתיקיית images/ שלצד הקבצים. */
+   אין ספריות חיצוניות ואין build. המתכונים נטענים מ-data.js והתמונות
+   מתיקיית images/ שלצד הקבצים. הקריאה היחידה לרשת היא לתגובות:
+   /api/comments, שרצה כ-Cloudflare Pages Function מול מסד D1. */
 
 (function () {
   "use strict";
@@ -44,7 +45,7 @@
   var activeCategory = CATEGORIES[0];
   var searchQuery = "";
   var selectedRecipe = null;
-  var comments = {};
+  var commentCache = {};
   var gridScrollY = 0;
 
   /* ------------------------------------------------------------ עזרים */
@@ -259,9 +260,21 @@
     attachImageFallback(recipeView);
     document.getElementById("back-btn").addEventListener("click", showBook);
     bindCommentForm(recipe);
+    ensureComments(recipe.id);
   }
 
   /* ------------------------------------------------------------ תגובות */
+
+  /* התגובות נשמרות ב-D1 מאחורי /api/comments (ראו functions/api/comments.js).
+     commentCache מחזיק לכל מתכון { status, items } כדי לא לטעון פעמיים. */
+  var COMMENTS_API = "api/comments";
+
+  var COMMENT_ERRORS = {
+    empty_field: "צריך למלא גם שם וגם תגובה.",
+    name_too_long: "השם ארוך מדי (עד 40 תווים).",
+    text_too_long: "התגובה ארוכה מדי (עד 1000 תווים).",
+    rate_limited: "רגע — נשלחו כבר כמה תגובות מהמכשיר הזה. אפשר לנסות שוב בעוד דקה."
+  };
 
   function commentsMarkup(recipe) {
     return (
@@ -272,14 +285,20 @@
       "</div>" +
       '<form class="comment-form" id="comment-form">' +
       '<label class="visually-hidden" for="comment-name">השם שלך</label>' +
-      '<input type="text" id="comment-name" placeholder="השם שלך" required>' +
+      '<input type="text" id="comment-name" placeholder="השם שלך" maxlength="40" required>' +
       '<label class="visually-hidden" for="comment-text">התגובה שלך</label>' +
-      '<textarea id="comment-text" rows="3" placeholder="כתבי כאן זיכרון מהמתכון, או איך יצא לך כשהכנת בעצמך..." required></textarea>' +
-      '<button type="submit">' +
+      '<textarea id="comment-text" rows="3" maxlength="1000" placeholder="כתבי כאן זיכרון מהמתכון, או איך יצא לך כשהכנת בעצמך..." required></textarea>' +
+      /* מלכודת לבוטים: מוסתרת מהעין ומקוראי מסך, ובוט שימלא אותה לא ישמור כלום */
+      '<div class="comment-trap" aria-hidden="true">' +
+      '<label for="comment-website">אל תמלאו את השדה הזה</label>' +
+      '<input type="text" id="comment-website" tabindex="-1" autocomplete="off">' +
+      "</div>" +
+      '<button type="submit" id="comment-submit">' +
       ICONS.send +
       "<span>הוסיפי תגובה</span>" +
       "</button>" +
-      '<p class="comment-note">התגובות נשמרות רק בחלון הזה — אין שרת מאחורי הספר, ורענון הדף ינקה אותן.</p>' +
+      '<p class="comment-error" id="comment-error" role="alert" hidden></p>' +
+      '<p class="comment-note">התגובות נשמרות בספר ומוצגות לכל מי שנכנס אליו.</p>' +
       "</form>" +
       '<div class="comment-list" id="comment-list">' +
       commentListMarkup(recipe.id) +
@@ -289,11 +308,19 @@
   }
 
   function commentListMarkup(recipeId) {
-    var list = comments[recipeId] || [];
-    if (list.length === 0) {
+    var state = commentCache[recipeId];
+
+    if (!state || state.status === "loading") {
+      return '<p class="comments-empty">טוען תגובות...</p>';
+    }
+    if (state.status === "error") {
+      return '<p class="comments-empty">לא הצלחנו לטעון את התגובות כרגע.</p>';
+    }
+    if (state.items.length === 0) {
       return '<p class="comments-empty">עדיין אין תגובות. תהיי הראשונה לשתף זיכרון!</p>';
     }
-    return list
+
+    return state.items
       .map(function (comment) {
         return (
           '<div class="comment">' +
@@ -302,7 +329,7 @@
           escapeHtml(comment.name) +
           "</span>" +
           '<span class="comment-date">' +
-          escapeHtml(comment.date) +
+          escapeHtml(formatCommentDate(comment.created_at)) +
           "</span>" +
           "</div>" +
           "<p>" +
@@ -314,10 +341,56 @@
       .join("");
   }
 
+  function formatCommentDate(seconds) {
+    return new Date(seconds * 1000).toLocaleDateString("he-IL");
+  }
+
+  /* מרעננים את הרשימה רק אם המשתמשת עדיין נמצאת באותו מתכון */
+  function refreshCommentList(recipeId) {
+    if (!selectedRecipe || selectedRecipe.id !== recipeId) {
+      return;
+    }
+    var listEl = document.getElementById("comment-list");
+    if (listEl) {
+      listEl.innerHTML = commentListMarkup(recipeId);
+    }
+  }
+
+  function ensureComments(recipeId) {
+    var state = commentCache[recipeId];
+    if (state && state.status === "ready") {
+      return;
+    }
+    loadComments(recipeId);
+  }
+
+  function loadComments(recipeId) {
+    commentCache[recipeId] = { status: "loading", items: [] };
+
+    fetch(COMMENTS_API + "?recipe=" + encodeURIComponent(recipeId))
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("http_" + response.status);
+        }
+        return response.json();
+      })
+      .then(function (data) {
+        commentCache[recipeId] = { status: "ready", items: data.comments || [] };
+        refreshCommentList(recipeId);
+      })
+      .catch(function () {
+        commentCache[recipeId] = { status: "error", items: [] };
+        refreshCommentList(recipeId);
+      });
+  }
+
   function bindCommentForm(recipe) {
     var form = document.getElementById("comment-form");
     var nameInput = document.getElementById("comment-name");
     var textInput = document.getElementById("comment-text");
+    var trapInput = document.getElementById("comment-website");
+    var submitButton = document.getElementById("comment-submit");
+    var errorEl = document.getElementById("comment-error");
 
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -328,18 +401,49 @@
         return;
       }
 
-      if (!comments[recipe.id]) {
-        comments[recipe.id] = [];
-      }
-      comments[recipe.id].push({
-        name: name,
-        text: text,
-        date: new Date().toLocaleDateString("he-IL")
-      });
+      submitButton.disabled = true;
+      errorEl.hidden = true;
 
-      document.getElementById("comment-list").innerHTML = commentListMarkup(recipe.id);
-      form.reset();
-      nameInput.focus();
+      fetch(COMMENTS_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recipe: recipe.id,
+          name: name,
+          text: text,
+          website: trapInput.value
+        })
+      })
+        .then(function (response) {
+          return response.json().then(function (data) {
+            if (!response.ok) {
+              throw new Error(data.error || "http_" + response.status);
+            }
+            return data;
+          });
+        })
+        .then(function (data) {
+          if (data.comment) {
+            var state = commentCache[recipe.id];
+            if (!state || state.status !== "ready") {
+              state = { status: "ready", items: [] };
+              commentCache[recipe.id] = state;
+            }
+            state.items.push(data.comment);
+            refreshCommentList(recipe.id);
+          }
+          form.reset();
+          nameInput.focus();
+        })
+        .catch(function (error) {
+          errorEl.textContent =
+            COMMENT_ERRORS[error.message] ||
+            "לא הצלחנו לשמור את התגובה. אפשר לנסות שוב בעוד רגע.";
+          errorEl.hidden = false;
+        })
+        .then(function () {
+          submitButton.disabled = false;
+        });
     });
   }
 

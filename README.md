@@ -1,31 +1,61 @@
-# ספר המתכונים של סבתא — אתר סטטי
+# ספר המתכונים של סבתא
 
-תיקייה אחת שמכילה הכל: HTML, CSS, JS והתמונות. אין שרת, אין `npm`, אין build,
-ואין אף קריאה לרשת בזמן ריצה. מעתיקים את התיקייה — והאתר עובד.
+אתר בלי build ובלי ספריות חיצוניות, שרץ על Cloudflare Pages. הדף עצמו סטטי;
+הדבר היחיד שרץ בצד השרת הוא נקודת הקצה של התגובות, שנשמרות במסד D1.
 
 ## מבנה התיקייה
 
 ```
 recipe-book/
-├── index.html      שלד הדף (RTL, כותרת, favicon)
-├── styles.css      כל העיצוב הוינטג'י
-├── data.js         20 המתכונים + הקטגוריות
-├── app.js          לוגיקה: סינון, חיפוש, תצוגת מתכון, תגובות
-├── README.md       הקובץ הזה
-└── images/         20 תמונות המתכונים (נטענות מהנתיב images/... שליד הקבצים)
+├── index.html                   שלד הדף (RTL, כותרת, favicon)
+├── styles.css                   כל העיצוב הוינטג'י
+├── data.js                      20 המתכונים + הקטגוריות
+├── app.js                       לוגיקה: סינון, חיפוש, תצוגת מתכון, תגובות
+├── images/                      20 תמונות המתכונים
+├── functions/api/comments.js    ה-API של התגובות (Cloudflare Pages Function)
+├── migrations/                  סכימת ה-D1
+├── wrangler.toml                שם הפרויקט וחיבור מסד הנתונים
+└── README.md                    הקובץ הזה
 ```
 
-## פרסום (deploy)
+כל נתיבי הקבצים בקוד יחסיים (`styles.css`, `images/01-chocolate-cake.jpg`),
+ולכן העמוד עצמו עובד גם מחוץ ל-Cloudflare. התגובות דורשות את `functions/`.
 
-| איך | מה עושים |
-|---|---|
-| בדיקה מקומית | לחיצה כפולה על `index.html` — נפתח בדפדפן ועובד |
-| Netlify / Vercel | גרירת התיקייה `recipe-book` לחלון ה-drop |
-| GitHub Pages | דחיפת תוכן התיקייה לענף `gh-pages` |
-| שרת רגיל / S3 | העלאת התיקייה כמו שהיא, בלי שינוי נתיבים |
+## הקמה ראשונה ב-Cloudflare (פעם אחת)
 
-כל הנתיבים בקוד הם יחסיים (`styles.css`, `images/01-chocolate-cake.jpg`), ולכן
-האתר עובד גם בשורש הדומיין וגם בתוך תת-תיקייה.
+```bash
+# 1. יצירת מסד הנתונים — מדביקים את ה-database_id שחוזר לתוך wrangler.toml
+npx wrangler d1 create recipe-book
+
+# 2. יצירת הטבלה במסד האמיתי
+npx wrangler d1 migrations apply recipe-book --remote
+
+# 3. מלח לגיבוב כתובות ה-IP (מומלץ; בלעדיו הגיבוב פשוט לא מומלח)
+npx wrangler pages secret put IP_SALT
+```
+
+ואז בממשק Cloudflare: **Workers & Pages → Create → Pages → Connect to Git**,
+בוחרים את המאגר, ומשאירים את שדות ה-build ריקים (Build command: ריק,
+Output directory: `/`). בהגדרות הפרויקט → **Settings → Bindings** מוסיפים
+D1 database binding בשם `DB` שמצביע על `recipe-book`.
+
+מכאן כל `git push` לענף הראשי מפרסם את האתר תוך כדקה, עם לוג build לכל commit.
+
+## פיתוח מקומי
+
+```bash
+npx wrangler d1 migrations apply recipe-book --local   # פעם אחת
+npx wrangler pages dev .                               # http://localhost:8788
+```
+
+זה מריץ את האתר ואת ה-API יחד, מול עותק מקומי של המסד. פתיחת `index.html`
+בלחיצה כפולה עדיין עובדת — אבל אז אין API, ובמקום התגובות תוצג הודעת שגיאה.
+
+## פרסום במקום אחר
+
+העמוד סטטי, ולכן `index.html` + `styles.css` + `data.js` + `app.js` + `images/`
+יעבדו בכל אחסון (S3, Netlify, GitHub Pages). מה שלא יעבוד שם זה התגובות —
+`functions/` הוא פורמט של Cloudflare Pages.
 
 ## החלפת תמונות
 
@@ -79,9 +109,40 @@ recipe-book/
 }
 ```
 
+## תגובות
+
+הטופס שולח ל-`/api/comments`, והתגובות נשמרות בטבלה `comments` ב-D1 ומוצגות
+לכל מי שנכנס לספר.
+
+| הגנה | מה היא עושה |
+|---|---|
+| מלכודת בוטים | שדה מוסתר בטופס; אם הוא מולא, השרת מחזיר "נשמר" ולא שומר כלום |
+| הגבלת קצב | עד 3 תגובות בדקה ועד 15 בשעה מאותה כתובת IP (מגובבת, לא נשמרת) |
+| אורך | עד 40 תווים בשם, עד 1000 תווים בתגובה |
+| מניעת XSS | כל טקסט מהמסד עובר `escapeHtml` לפני שהוא נכנס לדף |
+
+### אם יתחיל ספאם
+
+ב-`functions/api/comments.js` משנים `AUTO_APPROVE` ל-`false`. מאותו רגע כל תגובה
+חדשה נשמרת עם `approved = 0` ולא מוצגת עד אישור ידני. אין צורך במיגרציה.
+
+```bash
+# מה ממתין לאישור
+npx wrangler d1 execute recipe-book --remote \
+  --command "SELECT id, recipe_id, name, text FROM comments WHERE approved = 0"
+
+# אישור תגובה
+npx wrangler d1 execute recipe-book --remote \
+  --command "UPDATE comments SET approved = 1 WHERE id = 7"
+
+# מחיקת תגובה
+npx wrangler d1 execute recipe-book --remote \
+  --command "DELETE FROM comments WHERE id = 7"
+```
+
 ## מה בכוונה אין כאן
 
 * **פיצ'רים של AI** — הגרסה המקורית כללה צ'אט "העוזרת של סבתא" וסריקת מתכון
-  מתמונה, שניהם דרך Gemini API. שניהם הוסרו לחלוטין: אין מפתחות, אין קריאות רשת.
-* **שמירת תגובות** — התגובות נשמרות בזיכרון החלון בלבד ונעלמות ברענון, כי אין
-  שרת. ההודעה מתחת לטופס אומרת את זה למשתמשת במקום להעמיד פנים.
+  מתמונה, שניהם דרך Gemini API. שניהם הוסרו לחלוטין: אין מפתחות ואין קריאות
+  אליהם.
+* **הרשמה או התחברות** — כל אחד שנכנס לספר יכול להשאיר תגובה בשם שיבחר.

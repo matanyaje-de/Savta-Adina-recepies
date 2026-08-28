@@ -1,0 +1,10 @@
+name = "recipe-book"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "."
+
+# מסד התגובות. את database_id מקבלים מהפקודה:
+#   npx wrangler d1 create recipe-book
+[[d1_databases]]
+binding = "DB"
+database_name = "recipe-book"
+database_id = "PASTE_DATABASE_ID_HERE"
