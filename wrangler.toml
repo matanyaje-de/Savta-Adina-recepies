@@ -7,4 +7,4 @@ pages_build_output_dir = "."
 [[d1_databases]]
 binding = "DB"
 database_name = "recipe-book"
-database_id = "PASTE_DATABASE_ID_HERE"
+database_id = "75ddaaff-a797-4e47-b1df-169170a6d2d8"
